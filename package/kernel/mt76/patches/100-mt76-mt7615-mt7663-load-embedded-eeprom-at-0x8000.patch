@@ -1,0 +1,138 @@
+--- a/mt7615/eeprom.c
++++ b/mt7615/eeprom.c
+@@ -5,9 +5,12 @@
+  *         Felix Fietkau <nbd@nbd.name>
+  */
+ 
++#include <linux/mtd/mtd.h>
+ #include <linux/of.h>
+ #include "mt7615.h"
+ #include "eeprom.h"
++
++static int mt7615_check_eeprom(struct mt76_dev *dev);
+ 
+ static int mt7615_efuse_read(struct mt7615_dev *dev, u32 base,
+ 			     u16 addr, u8 *data)
+@@ -80,6 +83,41 @@
+ 	ret = mt76_eeprom_init(&dev->mt76, MT7615_EEPROM_FULL_SIZE);
+ 	if (ret < 0)
+ 		return ret;
++
++	if (is_mt7663(&dev->mt76)) {
++		struct mtd_info *mtd;
++		u8 *fbuf;
++		size_t retlen;
++		int err;
++
++		mtd = get_mtd_device_nm("factory");
++		if (IS_ERR(mtd))
++			mtd = get_mtd_device(NULL, 2);
++
++		if (!IS_ERR(mtd)) {
++			if (mtd->size >= 0x8000 + MT7663_EEPROM_SIZE) {
++				fbuf = kmalloc(MT7663_EEPROM_SIZE, GFP_KERNEL);
++				if (fbuf) {
++					err = mtd_read(mtd, 0x8000,
++						       MT7663_EEPROM_SIZE,
++						       &retlen, fbuf);
++					if ((err == 0 || mtd_is_bitflip(err)) &&
++					    retlen == MT7663_EEPROM_SIZE &&
++					    get_unaligned_le16(fbuf) == 0x7663) {
++						memset(dev->mt76.eeprom.data, 0,
++						       dev->mt76.eeprom.size);
++						memcpy(dev->mt76.eeprom.data,
++						       fbuf, MT7663_EEPROM_SIZE);
++						dev_info(dev->mt76.dev,
++							 "found embedded MT7663 EEPROM at offset 0x%x\n",
++							 0x8000);
++					}
++					kfree(fbuf);
++				}
++			}
++			put_mtd_device(mtd);
++		}
++	}
+ 
+ 	return mt7615_efuse_init(dev, addr);
+ }
+@@ -189,6 +227,80 @@
+ 		index = MT7663_EE_TX0_5G_G0_TARGET_POWER;
+ 
+ 	return index + group * 3;
++}
++
++static bool mt7615_eeprom_read_smg(struct mt7615_dev *dev, u32 offset, s8 *delta)
++{
++	u8 val;
++	s8 magnitude;
++
++	if (!delta || !mt7615_eeprom_read_byte(dev, offset, &val) ||
++	    !(val & MT_EE_RATE_POWER_EN))
++		return false;
++
++	magnitude = FIELD_GET(MT_EE_RATE_POWER_MASK, val);
++	*delta = magnitude;
++	if (val & MT_EE_RATE_POWER_SIGN)
++		*delta = -*delta;
++
++	return true;
++}
++
++s8 mt7615_mt7663_dpd_backoff(struct mt7615_dev *dev)
++{
++	s8 dpd0 = 0, dpd1 = 0;
++	bool have0 = mt7615_eeprom_read_smg(dev, MT7615_EEPROM_MT7663_DPD0, &dpd0);
++	bool have1 = mt7615_eeprom_read_smg(dev, MT7615_EEPROM_MT7663_DPD1, &dpd1);
++
++	if (have0 && have1)
++		return min(dpd0, dpd1);
++	if (have0)
++		return dpd0;
++	if (have1)
++		return dpd1;
++
++	return 0;
++}
++
++int mt7615_mt7663_rate_delta(struct mt7615_dev *dev,
++				     struct ieee80211_channel *chan,
++				     u8 chain_idx)
++{
++	u32 base = chain_idx ? MT7615_EEPROM_MT7663_5G_CHAIN1_DELTA :
++			 MT7615_EEPROM_MT7663_5G_CHAIN0_DELTA;
++	s8 delta;
++	int group;
++
++	if (chan->band != NL80211_BAND_5GHZ)
++		return 0;
++
++	group = mt7615_get_channel_group(chan->hw_value);
++	if (group < 0)
++		return 0;
++
++	if (!mt7615_eeprom_read_smg(dev, base + min(group, 7), &delta))
++		return 0;
++
++	return delta;
++}
++
++s8 mt7615_mt7663_rate_base(struct mt7615_dev *dev,
++				    struct ieee80211_channel *chan)
++{
++	u8 val;
++	int group;
++
++	if (chan->band != NL80211_BAND_5GHZ)
++		return 0;
++
++	group = mt7615_get_channel_group(chan->hw_value);
++	group = clamp(group, 0, 7);
++
++	if (!mt7615_eeprom_read_byte(dev, MT7615_EEPROM_MT7663_5G_RATE_TABLE + group,
++				     &val))
++		return 0;
++
++	return val;
+ }
+ 
+ int mt7615_eeprom_get_target_power_index(struct mt7615_dev *dev,
