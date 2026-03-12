@@ -1,0 +1,58 @@
+From: Dave Kearsley <thadavhj@gmail.com>
+Subject: [PATCH] mt76: mt7615: mt7663: load embedded EEPROM at 0x8000
+
+The Wavlink WL-WN575A3 Rev B stores the MT7663 PCIe EEPROM image at MTD
+offset 0x8000 instead of offset 0x0. Probe the embedded image, validate
+the MT7663 chip ID and MAC address, and load that EEPROM blob so MAC,
+target power, and firmware EEPROM upload use the correct data.
+
+Signed-off-by: Dave Kearsley <thadavhj@gmail.com>
+
+diff --git a/mt7615/eeprom.c b/mt7615/eeprom.c
+--- a/mt7615/eeprom.c
++++ b/mt7615/eeprom.c
+@@ -9,6 +9,8 @@
+ #include "mt7615.h"
+ #include "eeprom.h"
+ 
++static int mt7615_check_eeprom(struct mt76_dev *dev);
++
+ static int mt7615_efuse_read(struct mt7615_dev *dev, u32 base,
+ 			     u16 addr, u8 *data)
+ {
+@@ -81,6 +83,36 @@ static int mt7615_eeprom_load(struct mt7615_dev *dev, u32 addr)
+ 	if (ret < 0)
+ 		return ret;
+ 
++	if (is_mt7663(&dev->mt76) && mt7615_check_eeprom(&dev->mt76)) {
++		static const u32 mt7663_offsets[] = { 0x8000 };
++		u8 data[16];
++		int i;
++
++		for (i = 0; i < ARRAY_SIZE(mt7663_offsets); i++) {
++			ret = mt76_get_of_data_from_mtd(&dev->mt76, data,
++						       mt7663_offsets[i], sizeof(data));
++			if (ret)
++				continue;
++
++			if (get_unaligned_le16(data) != 0x7663 ||
++			    !is_valid_ether_addr(data + MT_EE_MAC_ADDR))
++				continue;
++
++			memset(dev->mt76.eeprom.data, 0, dev->mt76.eeprom.size);
++			ret = mt76_get_of_data_from_mtd(&dev->mt76,
++						       dev->mt76.eeprom.data,
++						       mt7663_offsets[i],
++						       MT7663_EEPROM_SIZE);
++			if (ret)
++				return ret;
++
++			dev_info(dev->mt76.dev,
++				 "found embedded MT7663 EEPROM at offset 0x%x\n",
++				 mt7663_offsets[i]);
++			break;
++		}
++	}
++
+ 	return mt7615_efuse_init(dev, addr);
+ }

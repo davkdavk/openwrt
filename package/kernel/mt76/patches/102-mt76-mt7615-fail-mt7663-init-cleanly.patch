@@ -1,0 +1,26 @@
+From: OpenCode <opencode@local>
+Subject: [PATCH] mt76: mt7615: fail MT7663 init cleanly on invalid EEPROM data
+
+Avoid hard hangs during WL-WN575A3 bring-up by refusing to continue MT7663
+registration when the EEPROM-derived txpower data is unusable. Return a
+probe error instead of progressing into unstable radio initialization.
+
+Signed-off-by: OpenCode <opencode@local>
+
+--- a/mt7615/pci_init.c
++++ b/mt7615/pci_init.c
+@@ -84,8 +84,13 @@
+ 		return ret;
+ 
+ 	ret = mt7615_init_hardware(dev);
+-	if (ret)
++	if (ret) {
++		if (is_mt7663(&dev->mt76))
++			dev_err(dev->mt76.dev,
++				"mt7663 init aborted: EEPROM/txpower init failed (%d)\n",
++				ret);
+ 		return ret;
++	}
+ 
+ 	ret = mt76_register_device(&dev->mt76, true, mt76_rates,
+ 				   ARRAY_SIZE(mt76_rates));
