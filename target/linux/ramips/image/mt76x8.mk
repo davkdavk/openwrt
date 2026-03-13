@@ -1245,7 +1245,7 @@ TARGET_DEVICES += wavlink_wl-wn570ha2
 define Device/wavlink_wl-wn575a3
   IMAGE_SIZE := 7872k
   DEVICE_VENDOR := Wavlink
-  DEVICE_MODEL := WL-WN575A3
+  DEVICE_MODEL := WL-WN575A3-B
   DEVICE_PACKAGES := kmod-mt7603 kmod-mt7615e kmod-mt7663-firmware-ap kmod-mt76x02-common
   SUPPORTED_DEVICES += wl-wn575a3
 endef
